@@ -1,5 +1,5 @@
 import streamlit as st
-from groq import Groq
+import groq
 import google.generativeai as genai
 import PyPDF2
 import json
@@ -22,10 +22,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------
-# API KEYS FROM ENVIRONMENT
+# API KEYS (use Streamlit Secrets)
 # -----------------------------------
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 # -----------------------------------
 # SIDEBAR - MODEL SELECTION
@@ -60,7 +60,9 @@ def extract_pdf_text(pdf_file):
         reader = PyPDF2.PdfReader(pdf_file)
         text = ""
         for page in reader.pages:
-            text += page.extract_text()
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text
         return text
     except Exception as e:
         return f"Error reading PDF: {str(e)}"
@@ -75,17 +77,17 @@ uploaded_files = st.file_uploader("📄 Upload Resumes (PDF only)", type=["pdf"]
 if st.button("🚀 Analyze & Rank Resumes", type="primary", use_container_width=True):
     
     if ai_provider == "Groq" and not GROQ_API_KEY:
-        st.error("⚠️ Groq API Key not found in environment variables! Set GROQ_API_KEY.")
+        st.error("⚠️ Groq API Key not found in Streamlit Secrets!")
     elif ai_provider == "Gemini" and not GEMINI_API_KEY:
-        st.error("⚠️ Gemini API Key not found in environment variables! Set GEMINI_API_KEY.")
+        st.error("⚠️ Gemini API Key not found in Streamlit Secrets!")
     elif not job_desc:
         st.error("⚠️ Please paste the job description!")
     elif not uploaded_files:
         st.error("⚠️ Please upload at least one resume!")
     else:
-        # Initialize AI client
+        # Initialize AI client (FIXED CODE)
         if ai_provider == "Groq":
-            client = Groq(api_key=GROQ_API_KEY)
+            client = groq.Client(api_key=GROQ_API_KEY)
         else:
             genai.configure(api_key=GEMINI_API_KEY)
             client = genai.GenerativeModel(model_name)
@@ -124,12 +126,10 @@ Provide your analysis in the following JSON format:
     "summary": "<2-3 sentence summary>"
 }}
 
-Be objective and specific. Return ONLY valid JSON, no markdown formatting."""
+Return ONLY valid JSON with NO markdown."""
 
             try:
                 # Get response from AI
-                full_response = ""
-                
                 if ai_provider == "Groq":
                     response = client.chat.completions.create(
                         model=model_name,
@@ -146,21 +146,21 @@ Be objective and specific. Return ONLY valid JSON, no markdown formatting."""
                         )
                     )
                     full_response = response.text
-                
-                # Try to parse JSON from response
+
+                # Parse JSON safely
                 try:
-                    # Extract JSON from markdown code blocks if present
                     if "```json" in full_response:
                         json_str = full_response.split("```json")[1].split("```")[0].strip()
                     elif "```" in full_response:
                         json_str = full_response.split("```")[1].split("```")[0].strip()
                     else:
                         json_str = full_response
-                    
+
                     analysis = json.loads(json_str)
                     analysis["filename"] = uploaded_file.name
                     results.append(analysis)
-                except Exception as parse_error:
+
+                except Exception:
                     st.warning(f"Could not parse structured data for {uploaded_file.name}")
                     results.append({
                         "filename": uploaded_file.name,
@@ -187,15 +187,12 @@ Be objective and specific. Return ONLY valid JSON, no markdown formatting."""
             # Sort by match score
             ranked_results = sorted(results, key=lambda x: x.get("match_score", 0), reverse=True)
             
-            # -----------------------------------
             # OVERVIEW CHARTS
-            # -----------------------------------
             st.subheader("📈 Overview Dashboard")
             
             col1, col2 = st.columns(2)
             
             with col1:
-                # Bar Chart - Match Scores
                 fig_bar = go.Figure(data=[
                     go.Bar(
                         x=[r['filename'] for r in ranked_results],
@@ -216,110 +213,63 @@ Be objective and specific. Return ONLY valid JSON, no markdown formatting."""
                 st.plotly_chart(fig_bar, use_container_width=True)
             
             with col2:
-                # Pie Chart - Recommendation Distribution
                 recommendations = [r.get('recommendation', 'Unknown') for r in ranked_results]
-                rec_counts = {}
-                for rec in recommendations:
-                    rec_counts[rec] = rec_counts.get(rec, 0) + 1
+                rec_counts = {rec: recommendations.count(rec) for rec in set(recommendations)}
                 
                 fig_pie = go.Figure(data=[
                     go.Pie(
                         labels=list(rec_counts.keys()),
                         values=list(rec_counts.values()),
-                        hole=0.4,
-                        marker_colors=['#00D26A', '#FFA500', '#FF4B4B', '#888888']
+                        hole=0.4
                     )
                 ])
-                fig_pie.update_layout(
-                    title="Recommendation Distribution",
-                    height=400
-                )
+                fig_pie.update_layout(title="Recommendation Distribution", height=400)
                 st.plotly_chart(fig_pie, use_container_width=True)
             
             st.markdown("---")
             
-            # -----------------------------------
             # DETAILED RANKINGS
-            # -----------------------------------
             st.subheader("🏆 Detailed Rankings")
             
             for rank, result in enumerate(ranked_results, 1):
                 score = result.get("match_score", 0)
                 
-                # Color coding
                 if score >= 80:
-                    color = "#00D26A"
-                    emoji = "🟢"
-                    badge = "Excellent Match"
+                    color = "#00D26A"; badge="Excellent Match"; emoji="🟢"
                 elif score >= 60:
-                    color = "#FFA500"
-                    emoji = "🟡"
-                    badge = "Good Match"
+                    color = "#FFA500"; badge="Good Match"; emoji="🟡"
                 else:
-                    color = "#FF4B4B"
-                    emoji = "🔴"
-                    badge = "Needs Improvement"
+                    color = "#FF4B4B"; badge="Needs Improvement"; emoji="🔴"
                 
                 with st.container():
                     st.markdown(f"""
-                    <div style="background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%); 
-                                padding: 20px; border-radius: 10px; border-left: 4px solid {color}; margin-bottom: 20px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <h2 style="margin: 0;">#{rank} {result['filename']}</h2>
-                                <span style="background: {color}; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px;">
-                                    {badge}
-                                </span>
-                            </div>
-                            <div style="text-align: right;">
-                                <h1 style="margin: 0; color: {color};">{emoji} {score}%</h1>
-                            </div>
-                        </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 20px;
+                                border-radius: 10px; border-left: 4px solid {color}; margin-bottom: 20px;">
+                        <h2>#{rank} — {result['filename']}</h2>
+                        <span style="background:{color};color:white;padding:5px 12px;border-radius:12px;font-size:12px;">
+                            {badge}
+                        </span>
+                        <h1 style="color:{color};text-align:right;">{emoji} {score}%</h1>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    col1, col2 = st.columns(2)
+                    st.markdown("**✅ Key Strengths:**")
+                    for s in result.get("key_strengths", []):
+                        st.markdown(f"- {s}")
                     
-                    with col1:
-                        st.markdown("**✅ Key Strengths:**")
-                        strengths = result.get('key_strengths', [])
-                        if strengths:
-                            for strength in strengths:
-                                st.markdown(f"• {strength}")
-                        else:
-                            st.markdown("_No strengths listed_")
-                        
-                        st.markdown("")
-                        st.markdown("**📊 Experience Relevance:**")
-                        st.info(result.get('experience_relevance', 'N/A'))
+                    st.markdown("**⚠️ Missing Skills:**")
+                    for m in result.get("missing_skills", []):
+                        st.markdown(f"- {m}")
                     
-                    with col2:
-                        st.markdown("**⚠️ Missing Skills:**")
-                        missing = result.get('missing_skills', [])
-                        if missing:
-                            for skill in missing:
-                                st.markdown(f"• {skill}")
-                        else:
-                            st.markdown("_No missing skills identified_")
-                        
-                        st.markdown("")
-                        st.markdown("**💡 Recommendation:**")
-                        rec = result.get('recommendation', 'N/A')
-                        if rec == "Highly Recommended":
-                            st.success(f"✨ {rec}")
-                        elif rec == "Recommended":
-                            st.info(f"👍 {rec}")
-                        elif rec == "Maybe":
-                            st.warning(f"🤔 {rec}")
-                        else:
-                            st.error(f"❌ {rec}")
+                    st.markdown("**📊 Experience Relevance:**")
+                    st.info(result.get("experience_relevance", "No info"))
                     
                     st.markdown("**📝 Summary:**")
-                    st.markdown(f"_{result.get('summary', 'No summary available')}_")
+                    st.write(result.get("summary", "No summary available"))
                     
                     st.markdown("---")
             
-            # Download results
+            # DOWNLOAD RESULTS
             st.download_button(
                 "📥 Download Full Results (JSON)",
                 data=json.dumps(ranked_results, indent=2),
