@@ -86,11 +86,13 @@ if st.button("🚀 Analyze & Rank Resumes", type="primary", use_container_width=
         st.error("⚠️ Please upload at least one resume!")
     else:
         # Initialize AI client (FIXED CODE)
+        import groq
         if ai_provider == "Groq":
-            client = groq.Client(api_key=GROQ_API_KEY)
+            client = groq.Groq(api_key=GROQ_API_KEY)
         else:
             genai.configure(api_key=GEMINI_API_KEY)
             client = genai.GenerativeModel(model_name)
+
         
         st.markdown("---")
         st.subheader("📊 Analysis Results")
